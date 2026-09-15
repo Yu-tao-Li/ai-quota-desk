@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"主窗口权限：拖动、隐藏、关闭、事件","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-start-dragging","core:window:allow-hide","core:window:allow-close","core:window:allow-set-always-on-top"]}}
