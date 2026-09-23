@@ -40,20 +40,19 @@ async fn query_all(state: tauri::State<'_, AppState>) -> Result<Vec<ProviderQuot
             cfg.luchikey_key.clone(),
         )
     };
-    let (mut g, k, mut c, d, l) = futures::join!(
+    let (g, k, cs, d, l) = futures::join!(
         glm::query(&state.client, &glm_key, &glm_base),
         kimi::query(&state.client, &kimi_key, &kimi_web_token),
-        codex::query(&state.client),
+        codex::query(&state.client, &codex_name),
         deepseek::query(&state.client, &deepseek_key),
         luchikey::query(&state.client, &lk_key, &lk_base),
     );
-    // 自定义显示名（OpenAI 接口只给 pro/plus，具体套餐叫法由用户配置）
-    if !codex_name.trim().is_empty() {
-        c.name = codex_name.trim().to_string();
-    }
-    // GLM 套餐等级徽章由后端给（pro 等），名称保持「智谱 GLM」
-    let _ = &mut g;
-    Ok(vec![g, k, c, d, l])
+    // ChatGPT 每个账号一张卡（多账号来自 ~/.codex/accounts/registry.json）
+    let mut out = vec![g, k];
+    out.extend(cs);
+    out.push(d);
+    out.push(l);
+    Ok(out)
 }
 
 #[tauri::command]

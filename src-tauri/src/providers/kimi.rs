@@ -357,15 +357,23 @@ pub async fn query(client: &reqwest::Client, api_key: &str, web_token: &str) -> 
     };
 
     let key = api_key.trim().to_string();
-    // 网页 Token 优先级：手动配置 > 设备码 OAuth（自续命） > 桌面版登录态
-    let mut tok = if web_token.trim().is_empty() {
-        crate::kimi_oauth::valid_access_token(client)
-            .await
-            .unwrap_or_else(|| detect_desktop_token().unwrap_or_default())
+    let manual_web = (!web_token.trim().is_empty()).then(|| web_token.trim().to_string());
+
+    // 三类凭证走不同端点，不能混用：
+    // - Coding API Key / 设备码 OAuth access token → api.kimi.com/coding/v1（数据面）
+    // - 网页 Token（手动）/ Kimi 桌面版登录态       → www.kimi.com/apiv2（网页面，含月度池）
+    let oauth_tok = if manual_web.is_none() {
+        crate::kimi_oauth::valid_access_token(client).await
     } else {
-        web_token.trim().to_string()
+        None
     };
-    if key.is_empty() && tok.is_empty() {
+    let web_tok = if let Some(t) = manual_web.clone() {
+        Some((t, "网页 Token".to_string()))
+    } else {
+        detect_desktop_token().map(|t| (t, "桌面版登录态".to_string()))
+    };
+
+    if key.is_empty() && oauth_tok.is_none() && web_tok.is_none() {
         out.error = Some("未配置：在设置里完成 Kimi 登录，或填 API Key（也可运行 Kimi 桌面版）".into());
         return out;
     }
@@ -373,45 +381,52 @@ pub async fn query(client: &reqwest::Client, api_key: &str, web_token: &str) -> 
     let mut extras: Vec<String> = vec![];
     let mut last_err: Option<String> = None;
 
-    // 1) 5h/周窗口：优先 Coding API Key，失败或未配置时退回网页 GetUsages
+    // 1) 5h/周窗口：Coding API Key → 设备码 OAuth（同走 coding/v1 数据面）→ 网页面 GetUsages
     if !key.is_empty() {
         if let Err(e) = fetch_coding_api(client, &key, &mut out, &mut extras, now).await {
             last_err = Some(e);
         }
     }
-    if out.windows.is_empty() && !tok.is_empty() {
-        if let Err(e) = fetch_web_usage(client, &tok, &mut out).await {
-            // 自动读取的 token 可能过期（桌面版 15 分钟轮换一次，没运行时是旧的）
-            // → 重新扫一次 leveldb 取最新 token 再试一次
-            if web_token.trim().is_empty() {
-                if let Some(fresh) = detect_desktop_token() {
-                    if fresh != tok {
-                        tok = fresh;
-                        last_err = None;
-                        if let Err(e2) = fetch_web_usage(client, &tok, &mut out).await {
-                            last_err = Some(e2);
+    if out.windows.is_empty() {
+        if let Some(ot) = &oauth_tok {
+            if let Err(e) = fetch_coding_api(client, ot, &mut out, &mut extras, now).await {
+                last_err = Some(format!("Kimi 登录（OAuth）查询失败：{e}"));
+            }
+        }
+    }
+    let mut web_tok = web_tok;
+    if out.windows.is_empty() {
+        if let Some((tok, label)) = &web_tok {
+            if let Err(e) = fetch_web_usage(client, tok, &mut out).await {
+                // 桌面版 token 15 分钟轮换，失败时重扫一次 leveldb
+                if manual_web.is_none() {
+                    if let Some(fresh) = detect_desktop_token() {
+                        if &fresh != tok {
+                            web_tok = Some((fresh, label.clone()));
+                            if let Err(e2) =
+                                fetch_web_usage(client, &web_tok.as_ref().unwrap().0, &mut out).await
+                            {
+                                last_err = Some(e2);
+                            }
+                        } else {
+                            last_err = Some(e);
                         }
                     } else {
-                        last_err = Some(e);
+                        last_err = Some(format!("{label}不可用（打开一下 Kimi 桌面版即可恢复）"));
                     }
                 } else {
-                    last_err = Some("Kimi 桌面版登录态读取失败（打开一下 Kimi 桌面版即可恢复）".into());
+                    last_err = Some(format!("网页 Token 查询失败：{e}"));
                 }
-            } else {
-                last_err = Some(e);
             }
         }
     }
 
-    // 2) 月度总量池 + 具体套餐名（best effort，仅网页 Token 可查）
-    if !tok.is_empty() {
-        if let Some(title) = fetch_web_plan(client, &tok).await {
+    // 2) 月度总量池 + 具体套餐名（只有网页面凭证可查：手动网页 Token / 桌面版登录态）
+    if let Some((tok, _label)) = &web_tok {
+        if let Some(title) = fetch_web_plan(client, tok).await {
             out.plan = Some(title);
-        } else if out.windows.is_empty() {
-            // token 失效时给出明确指引（不打断已成功的窗口显示）
-            last_err.get_or_insert_with(|| "Kimi 登录态已过期：打开一下 Kimi 桌面版即可自动恢复".into());
         }
-        match fetch_web_monthly(client, &tok).await {
+        match fetch_web_monthly(client, tok).await {
             Ok(Some((used_ratio, code_ratio, expire))) => {
                 out.windows.push(QuotaWindow {
                     label: "每月总量".into(),

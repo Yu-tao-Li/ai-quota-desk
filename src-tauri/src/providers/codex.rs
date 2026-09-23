@@ -1,16 +1,17 @@
-//! ChatGPT (Codex) 用量查询。
+//! ChatGPT (Codex) 用量查询 —— 多账号版。
 //!
-//! 实现参考 CodexBar / VibeCodingTracker 的已验证路子：
-//! - 凭证：`$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`）里的
-//!   `tokens.access_token / refresh_token / account_id`
-//! - 查询：`GET https://chatgpt.com/backend-api/wham/usage`，Bearer 认证，
-//!   带 codex CLI 风格 User-Agent、originator 和可选 ChatGPT-Account-Id 头
-//! - 401 时用 refresh_token 到 auth.openai.com 换新 token 并回写 auth.json
-//!   （refresh token 会轮换，必须持久化；回写前校验 mtime 防止覆盖并发的 codex CLI）
+//! 账号来源（与 AiMaMi 的账号管理体系兼容）：
+//! - `~/.codex/accounts/registry.json`：多账号注册表，`items[]` 含 email / plan /
+//!   snapshotPath（每个账号一份 auth.json 格式的快照），`activeAccountKey` 指当前账号
+//! - 无注册表时回退单个账号：`~/.codex/auth.json`
+//!
+//! 每个账号独立查询 `wham/usage` + `wham/rate-limit-reset-credits`；
+//! 401 时用该账号自己的 refresh_token 到 auth.openai.com 换新并回写原文件
+//! （refresh token 轮换，必须持久化；回写前校验 mtime 防止覆盖并发的 codex CLI / AiMaMi）。
 
-use super::{label_for_reset, now_ms, short_err, ProviderQuota, QuotaWindow};
+use super::{label_for_reset, now_ms, short_err, ProviderQuota, QuotaWindow, ResetCredit};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const WHAM_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const RESET_CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
@@ -32,31 +33,95 @@ pub fn auth_file() -> PathBuf {
     codex_home().join("auth.json")
 }
 
+fn registry_file() -> PathBuf {
+    codex_home().join("accounts").join("registry.json")
+}
+
 pub fn auth_file_exists() -> bool {
-    auth_file().is_file()
+    auth_file().is_file() || registry_file().is_file()
 }
 
-struct AuthInfo {
-    access_token: String,
+struct Account {
+    /// 卡片显示名
+    name: String,
+    /// 该账号的凭证文件（snapshot 或 auth.json），刷新后回写这里
+    auth_path: PathBuf,
     account_id: Option<String>,
+    access_token: String,
+    refresh_token: String,
 }
 
-fn read_auth() -> Result<AuthInfo, String> {
-    let path = auth_file();
-    let body = std::fs::read_to_string(&path)
-        .map_err(|_| format!("未找到 {}（需先 codex login）", path.display()))?;
-    let v: Value = serde_json::from_str(&body).map_err(|e| format!("auth.json 解析失败: {e}"))?;
-    let access_token = v["tokens"]["access_token"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or("auth.json 中没有 tokens.access_token")?
-        .to_string();
+fn auth_info_from(v: &Value) -> Option<(String, Option<String>, String)> {
+    let access = v["tokens"]["access_token"].as_str().filter(|s| !s.is_empty())?;
     let account_id = v["tokens"]["account_id"].as_str().map(|s| s.to_string());
-    Ok(AuthInfo { access_token, account_id })
+    let refresh = v["tokens"]["refresh_token"].as_str().unwrap_or("").to_string();
+    Some((access.to_string(), account_id, refresh))
 }
 
-async fn wham_get(client: &reqwest::Client, token: &str, account_id: Option<&str>) -> Result<Value, reqwest::StatusCode> {
-    wham_get_url(client, token, account_id, WHAM_URL).await
+/// plan 字段（如 "20x pro"）转显示名（"Pro 20x"）。
+fn plan_display(plan: &str) -> String {
+    let mut words: Vec<String> = plan
+        .split_whitespace()
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect();
+    words.reverse();
+    words.join(" ")
+}
+
+/// 读取账号列表：registry 多账号优先，回退 auth.json 单账号。
+fn load_accounts(codex_name: &str) -> Result<Vec<Account>, String> {
+    let reg_path = registry_file();
+    if let Ok(text) = std::fs::read_to_string(&reg_path) {
+        if let Ok(reg) = serde_json::from_str::<Value>(&text) {
+            let mut accounts = vec![];
+            if let Some(items) = reg["items"].as_array() {
+                for item in items {
+                    let Some(snap_path) = item["snapshotPath"].as_str() else { continue };
+                    let Ok(body) = std::fs::read_to_string(snap_path) else { continue };
+                    let Ok(v) = serde_json::from_str::<Value>(&body) else { continue };
+                    let Some((access, account_id, refresh)) = auth_info_from(&v) else { continue };
+                    let plan = item["plan"].as_str().unwrap_or("");
+                    let email = item["email"].as_str().unwrap_or("");
+                    let display = if plan.is_empty() {
+                        if email.is_empty() { "ChatGPT".to_string() } else { format!("ChatGPT（{email}）") }
+                    } else {
+                        format!("ChatGPT {}", plan_display(plan))
+                    };
+                    accounts.push(Account {
+                        name: display,
+                        auth_path: PathBuf::from(snap_path),
+                        account_id,
+                        access_token: access,
+                        refresh_token: refresh,
+                    });
+                }
+            }
+            if !accounts.is_empty() {
+                return Ok(accounts);
+            }
+        }
+    }
+
+    // 回退：单账号 auth.json
+    let path = auth_file();
+    let body = std::fs::read_to_string(&path).map_err(|_| format!("未找到 {}（需先 codex login）", path.display()))?;
+    let v: Value = serde_json::from_str(&body).map_err(|e| format!("auth.json 解析失败: {e}"))?;
+    let (access, account_id, refresh) =
+        auth_info_from(&v).ok_or("auth.json 中没有 tokens.access_token")?;
+    let name = if codex_name.trim().is_empty() { "ChatGPT".to_string() } else { codex_name.trim().to_string() };
+    Ok(vec![Account {
+        name,
+        auth_path: path,
+        account_id,
+        access_token: access,
+        refresh_token: refresh,
+    }])
 }
 
 async fn wham_get_url(
@@ -81,22 +146,17 @@ async fn wham_get_url(
     resp.json::<Value>().await.map_err(|_| reqwest::StatusCode::BAD_REQUEST)
 }
 
-/// 用 refresh_token 换新 token 并安全回写 auth.json（mtime 校验，保留其他字段）。
-async fn refresh_token(client: &reqwest::Client) -> Result<String, String> {
-    let path = auth_file();
+/// 用指定凭证文件里的 refresh_token 换新 token 并安全回写该文件
+/// （mtime 校验，保留其他字段；refresh token 轮换必须持久化）。
+async fn refresh_token_at(client: &reqwest::Client, path: &Path, refresh_token: &str) -> Result<String, String> {
     let expected_mtime = path
         .metadata()
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_nanos());
-    let body = std::fs::read_to_string(&path).map_err(|e| format!("读取 auth.json 失败: {e}"))?;
-    let root: Value = serde_json::from_str(&body).map_err(|e| format!("auth.json 解析失败: {e}"))?;
-    let refresh = root["tokens"]["refresh_token"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or("auth.json 中没有 refresh_token")?
-        .to_string();
+    let body = std::fs::read_to_string(path).map_err(|e| format!("读取凭证失败: {e}"))?;
+    let root: Value = serde_json::from_str(&body).map_err(|e| format!("凭证解析失败: {e}"))?;
 
     let resp = client
         .post(CODEX_TOKEN_URL)
@@ -104,7 +164,7 @@ async fn refresh_token(client: &reqwest::Client) -> Result<String, String> {
         .json(&json!({
             "client_id": CODEX_CLIENT_ID,
             "grant_type": "refresh_token",
-            "refresh_token": refresh,
+            "refresh_token": refresh_token,
         }))
         .send()
         .await
@@ -119,7 +179,7 @@ async fn refresh_token(client: &reqwest::Client) -> Result<String, String> {
         .ok_or("刷新响应中没有 access_token")?
         .to_string();
 
-    // 回写（校验 mtime：如果 codex CLI 刚改过文件就不覆盖）
+    // 回写（校验 mtime：如果 codex CLI / AiMaMi 刚改过文件就不覆盖）
     let current_mtime = path
         .metadata()
         .and_then(|m| m.modified())
@@ -127,7 +187,7 @@ async fn refresh_token(client: &reqwest::Client) -> Result<String, String> {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_nanos());
     if expected_mtime.is_some() && current_mtime != expected_mtime {
-        return Err("auth.json 刚被 codex CLI 修改，跳过回写".into());
+        return Err("凭证文件刚被其他程序修改，跳过回写".into());
     }
     let mut new_root = root.clone();
     if let Some(t) = new_root.get_mut("tokens").and_then(|v| v.as_object_mut()) {
@@ -140,8 +200,8 @@ async fn refresh_token(client: &reqwest::Client) -> Result<String, String> {
         }
     }
     new_root["last_refresh"] = json!(chrono::Utc::now().to_rfc3339());
-    std::fs::write(&path, serde_json::to_string_pretty(&new_root).unwrap_or_default())
-        .map_err(|e| format!("回写 auth.json 失败: {e}"))?;
+    std::fs::write(path, serde_json::to_string_pretty(&new_root).unwrap_or_default())
+        .map_err(|e| format!("回写凭证失败: {e}"))?;
     Ok(access)
 }
 
@@ -189,11 +249,15 @@ fn parse_wham(body: &Value, now: i64, out: &mut ProviderQuota) {
     out.extra = if extras.is_empty() { None } else { Some(extras.join(" · ")) };
 }
 
-pub async fn query(client: &reqwest::Client) -> ProviderQuota {
-    let now = now_ms();
+async fn wham_get(client: &reqwest::Client, token: &str, account_id: Option<&str>) -> Result<Value, reqwest::StatusCode> {
+    wham_get_url(client, token, account_id, WHAM_URL).await
+}
+
+/// 查询单个账号：wham/usage + 重置卡详情，401 时刷新该账号凭证重试。
+async fn query_account(client: &reqwest::Client, acct: &Account, now: i64) -> ProviderQuota {
     let mut out = ProviderQuota {
         id: "codex".into(),
-        name: "ChatGPT".into(),
+        name: acct.name.clone(),
         ok: false,
         error: None,
         plan: None,
@@ -203,23 +267,14 @@ pub async fn query(client: &reqwest::Client) -> ProviderQuota {
         fetched_at_ms: now,
     };
 
-    let auth = match read_auth() {
-        Ok(a) => a,
-        Err(e) => {
-            out.error = Some(e);
-            return out;
-        }
-    };
-
-    let mut token = auth.access_token.clone();
-    let body = match wham_get(client, &token, auth.account_id.as_deref()).await {
+    let mut token = acct.access_token.clone();
+    let body = match wham_get(client, &token, acct.account_id.as_deref()).await {
         Ok(v) => v,
         Err(reqwest::StatusCode::UNAUTHORIZED) => {
-            // token 过期 → 刷新一次再试
-            match refresh_token(client).await {
+            match refresh_token_at(client, &acct.auth_path, &acct.refresh_token).await {
                 Ok(new_token) => {
                     token = new_token;
-                    match wham_get(client, &token, auth.account_id.as_deref()).await {
+                    match wham_get(client, &token, acct.account_id.as_deref()).await {
                         Ok(v) => v,
                         Err(s) => {
                             out.error = Some(format!("刷新后仍失败 HTTP {s}（可尝试重新 codex login）"));
@@ -242,7 +297,7 @@ pub async fn query(client: &reqwest::Client) -> ProviderQuota {
     parse_wham(&body, now, &mut out);
 
     // 重置卡详情：每张可用卡的到期时间（best effort）
-    if let Ok(credits_body) = wham_get_url(client, &token, auth.account_id.as_deref(), RESET_CREDITS_URL).await {
+    if let Ok(credits_body) = wham_get_url(client, &token, acct.account_id.as_deref(), RESET_CREDITS_URL).await {
         let now_sec = now / 1000;
         let mut cards: Vec<Option<i64>> = credits_body["credits"]
             .as_array()
@@ -267,7 +322,7 @@ pub async fn query(client: &reqwest::Client) -> ProviderQuota {
         out.credits = cards
             .into_iter()
             .enumerate()
-            .map(|(i, exp)| super::ResetCredit {
+            .map(|(i, exp)| ResetCredit {
                 index: i as i64 + 1,
                 expires_at_ms: exp,
             })
@@ -291,4 +346,33 @@ pub async fn query(client: &reqwest::Client) -> ProviderQuota {
     }
     out.ok = true;
     out
+}
+
+/// 查询全部 Codex 账号（每个账号一张卡）。
+pub async fn query(client: &reqwest::Client, codex_name: &str) -> Vec<ProviderQuota> {
+    let now = now_ms();
+    let accounts = match load_accounts(codex_name) {
+        Ok(a) => a,
+        Err(e) => {
+            return vec![ProviderQuota {
+                id: "codex".into(),
+                name: "ChatGPT".into(),
+                ok: false,
+                error: Some(e),
+                plan: None,
+                extra: None,
+                windows: vec![],
+                credits: vec![],
+                fetched_at_ms: now,
+            }];
+        }
+    };
+    let results = futures::future::join_all(
+        accounts
+            .iter()
+            .map(|a| query_account(client, a, now))
+            .collect::<Vec<_>>(),
+    )
+    .await;
+    results.into_iter().collect()
 }
