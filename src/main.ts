@@ -1,7 +1,6 @@
 import "./style.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface QuotaWindow {
   label: string;
@@ -173,6 +172,7 @@ function windowHtml(w: QuotaWindow): string {
         <span class="used">${w.used_text ? esc(w.used_text) : `已用 ${Math.round(w.used_percent)}%`}</span>
         ${reset}
       </div>
+      ${w.used_text && w.resets_at_ms ? `<div class="window-bottom"><span class="used">已用 ${Math.round(w.used_percent)}%</span>${reset}</div>` : ""}
     </div>`;
 }
 
@@ -339,7 +339,7 @@ function render() {
       view = "settings";
       render();
     });
-    app.querySelector("#btn-hide")?.addEventListener("click", () => void getCurrentWindow().hide());
+    app.querySelector("#btn-hide")?.addEventListener("click", () => void invoke("hide_main"));
     updateTimes();
   } else {
     app.querySelector("#btn-back")?.addEventListener("click", () => {

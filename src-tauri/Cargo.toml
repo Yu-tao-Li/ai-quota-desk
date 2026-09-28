@@ -16,6 +16,8 @@ tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+sha2 = "0.10"
+aes-gcm = "0.10"
 reqwest = { version = "0.12", features = ["json", "gzip"] }
 futures = "0.3"
 chrono = "0.4"
@@ -23,3 +25,4 @@ dirs = "5"
 
 [profile.dev]
 incremental = true
+

@@ -3,6 +3,7 @@
 mod config;
 mod kimi_oauth;
 mod providers;
+mod zcode_creds;
 
 use config::{Config, ConfigView};
 use providers::{codex, deepseek, glm, kimi, luchikey, ProviderQuota};
@@ -100,6 +101,20 @@ fn kimi_logout() {
     kimi_oauth::logout();
 }
 
+#[tauri::command]
+fn hide_main(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+}
+
+#[tauri::command]
+fn minimize_main(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.minimize();
+    }
+}
+
 fn toggle_main_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         if w.is_visible().unwrap_or(false) {
@@ -124,7 +139,7 @@ pub fn run() {
             config: RwLock::new(config::load()),
         })
         .invoke_handler(tauri::generate_handler![
-            query_all, get_config, set_config, kimi_login_start, kimi_login_poll, kimi_login_status, kimi_logout
+            query_all, get_config, set_config, kimi_login_start, kimi_login_poll, kimi_login_status, kimi_logout, hide_main, minimize_main
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "显示 / 隐藏", true, None::<&str>)?;
