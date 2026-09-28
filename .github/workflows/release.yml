@@ -1,0 +1,46 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build Tauri app (no bundle)
+        run: npm run tauri build -- --no-bundle
+
+      - name: Rename binary
+        shell: pwsh
+        run: |
+          Copy-Item src-tauri/target/release/ai-quota-desk.exe ai-quota-desk-windows-x64.exe
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ai-quota-desk-windows-x64.exe
+          generate_release_notes: true
