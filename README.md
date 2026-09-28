@@ -1,66 +1,69 @@
 # AI Quota Desk
 
-A native desktop widget (always-on-top floating window) that shows **remaining quota across five AI coding plans at a glance** — GLM Coding Plan, Kimi for Coding, ChatGPT (Codex), DeepSeek balance, and sub2api-style relay balance.
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
+![Built with](https://img.shields.io/badge/built%20with-Tauri%202%20%7C%20Rust%20%7C%20TypeScript-orange)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-![screenshot](docs/screenshot.png)
+A native **always-on-top desktop widget** that shows the remaining quota of your AI coding plans at a glance — five providers on one floating card, auto-refreshing in the background.
 
-Built with **Tauri 2 + Rust + TypeScript**. Single lightweight binary, no Electron.
+<p align="center">
+  <img src="docs/screenshot.png" alt="AI Quota Desk screenshot" width="480" />
+</p>
 
-## Features
+## Supported providers
 
-- **Floating always-on-top window** — frameless, draggable, collapsible to system tray; resizable with a two-column masonry layout and a layered dark theme
-- **Per-provider cards** with brand logos, plan badges (e.g. *Pro*, *Allegretto*), progress bars colored by remaining quota (green / amber / red), usage details, and precise reset countdowns ("3h42m before reset", reset-credit expiry timestamps down to the minute)
-- **Auto refresh** on a configurable interval; unified "last updated" timestamp in the title bar
-- **Zero-prompt credentials**: auto-detects GLM keys from local ZCode/Claude configs, reads Codex OAuth from `~/.codex/auth.json` (with automatic token refresh written back safely), and reuses the Kimi desktop app's login state when available
-
-## Supported providers & data sources
-
-| Provider | Endpoint | Auth |
+| Provider | What you see | Credential |
 |---|---|---|
-| 智谱 GLM Coding Plan | `GET {base}/api/monitor/usage/quota/limit` | API key (auto-detected from ZCode / Claude Code config, or manual) |
-| Kimi for Coding | `GET api.kimi.com/coding/v1/usages` + membership APIs | **Device-code OAuth** (self-refreshing), or API key, or desktop-app login state, or manual web token |
-| ChatGPT (Codex) | `GET chatgpt.com/backend-api/wham/usage` (+ `wham/rate-limit-reset-credits`) | OAuth from `~/.codex/auth.json`, auto refresh with mtime-guarded write-back |
-| DeepSeek | `GET api.deepseek.com/user/balance` | API key |
-| sub2api relays (e.g. Luchikey) | `GET {base}/v1/usage` | API key |
+| **智谱 GLM Coding Plan** | 5-hour window, weekly quota, reset credits (with expiry timestamps) | API key — auto-detected from ZCode / Claude Code config, or manual |
+| **Kimi for Coding** | Weekly quota, 5-hour window, monthly pool, plan tier, booster wallet | **Device-code OAuth** (self-refreshing) · API key · desktop-app login state · manual web token |
+| **ChatGPT (Codex)** | Weekly/5-hour windows, reset credits with expiry | OAuth from `~/.codex/auth.json` — **multi-account** via AiMaMi-compatible registry |
+| **DeepSeek** | Account balance | API key |
+| **sub2api relays** (Luchikey etc.) | Remaining balance | API key |
 
-### Kimi device-code login
+## Highlights
 
-Kimi's OAuth implementation (`packages/oauth` in the official `MoonshotAI/kimi-code` repo) supports the standard RFC 8628 device flow against `auth.kimi.com`. This app implements it natively:
+- **One floating card for everything.** Frameless always-on-top window, draggable, collapses to the system tray. Two-column masonry layout with a layered dark theme; every card carries brand logos, plan badges and progress bars that turn amber → red as quota drains.
+- **Reset info you can act on.** Reset countdowns are precise to the minute ("3h42m before reset"), and both ChatGPT and GLM reset credits are listed individually with their expiry dates — so you know *when* to burn them before they vanish.
+- **Multi-account ChatGPT.** If you use [AiMaMi](https://github.com/borawong/AiMaMi) to manage several Codex accounts, every account gets its own card automatically (read from `~/.codex/accounts/registry.json`), each refreshing its own tokens independently.
+- **Kimi login that stays logged in.** Implements the standard device-code flow (`RFC 8628`) against `auth.kimi.com`, exactly like the official `kimi-code` CLI. Approve once in the browser; the app then rotates its own access tokens forever. No cookies to re-copy, no desktop app to keep running.
+- **Zero-prompt credential detection.** GLM keys are picked up from existing ZCode / Claude Code configs; Codex tokens from the official `auth.json`. Nothing is ever sent anywhere except the vendor's own API.
 
-1. Click **Login Kimi** in Settings — a user code is copied and the authorization page opens in your browser
-2. Approve the request
-3. Done — the app holds a long-lived refresh token and **silently rotates its own access tokens** (15-min TTL) from then on. No dependency on the Kimi desktop app running, no cookie re-copying.
+## Install & build
 
-Refresh tokens are rotated per the spec and persisted to `%APPDATA%\ai-quota-desk\kimi-oauth.json`.
-
-## Build
-
-Prerequisites: [Rust](https://rustup.rs) (MSVC toolchain on Windows), Node.js 18+, and the [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (preinstalled on Windows 11).
+Prerequisites: [Rust](https://rustup.rs) (MSVC toolchain on Windows), Node.js 18+, WebView2 runtime (preinstalled on Windows 11).
 
 ```bash
+git clone https://github.com/Yu-tao-Li/ai-quota-desk.git
+cd ai-quota-desk
 npm install
-npm run tauri dev     # develop
-npm run tauri build   # bundle installer (NSIS)
-npm run tauri build -- --no-bundle   # standalone exe only
+npm run tauri dev                  # develop
+npm run tauri build                # NSIS installer
+npm run tauri build -- --no-bundle # standalone exe
 ```
 
-Output binary: `src-tauri/target/release/ai-quota-desk.exe`
+Binary output: `src-tauri/target/release/ai-quota-desk.exe` — run it, then right-click the tray icon for options. Credentials can be entered in the in-app ⚙ settings; they are stored locally in `%APPDATA%/ai-quota-desk/` and never leave your machine.
 
-Configuration lives in `%APPDATA%/ai-quota-desk/config.json` — API keys can also be entered in the in-app Settings page.
+## Notes on the trickier integrations
 
-## Implementation notes
+These are documented for anyone building something similar:
 
-- **Window labels are inferred from reset countdowns** rather than vendor enums — e.g. Zhipu's `unit/number` fields are unreliable across plan generations (a weekly window was once misread as monthly); time-to-reset is the ground truth (<6.5h → 5-hour window, <8d → weekly, …).
-- **Codex token refresh is write-safe**: the refresh flow captures `auth.json`'s mtime before reading and aborts the write-back if the file changed, so it never clobbers a concurrently-rotated token from the official Codex CLI.
-- Reference implementations this project learned from:
-  - [zai-org/zai-coding-plugins](https://github.com/zai-org/zai-coding-plugins) — official GLM usage endpoints
-  - [steipete/CodexBar](https://github.com/steipete/CodexBar) (`docs/codex.md`, `docs/kimi.md`, `Sources/CodexBarCore/Providers/Kimi`) — field mappings, Kimi web-fallback APIs, membership pool
-  - [Mai0313/VibeCodingTracker](https://github.com/Mai0313/VibeCodingTracker) (`src/core/src/quota/wham.rs`) — Codex wham/usage + refresh flow
-  - [VicBilibily/GCMP](https://github.com/VicBilibily/GCMP) — Kimi usage response parsing
-  - [MoonshotAI/kimi-code](https://github.com/MoonshotAI/kimi-code) (`packages/oauth`) — device-code flow and refresh semantics
-  - [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) — relay usage endpoint
-  - [borawong/AiMaMi](https://github.com/borawong/AiMaMi) — inspiration for the Tauri desktop-companion form factor
+- **GLM reset credits** live on a ZCode-internal endpoint (`zcode.z.ai/api/v1/coding-plan/reset/status`) that requires two credentials from ZCode's AES-256-GCM-encrypted credential store. The store's key-derivation string must match Node's `process.platform` (`win32`), not Rust's `std::env::consts::OS` (`windows`) — a one-character mismatch silently breaks decryption. See `src-tauri/src/zcode_creds.rs`.
+- **GLM window classification** should use the `unit` field (`3` → 5-hour window, `6` → weekly), not reset-time ordering — near the end of a weekly cycle the weekly window resets *earlier* than the 5-hour one and time-sorting mislabels the two.
+- **Codex token refresh writes back safely**: the refresh flow captures the credential file's mtime first and aborts the write-back if it changed, so it never clobbers a token rotated concurrently by the Codex CLI or AiMaMi.
+- **Kimi's two API planes don't mix**: `api.kimi.com/coding/v1` accepts the CLI/OAuth identity, while `www.kimi.com/apiv2` (monthly pool, plan title) only accepts web-session cookies. Query each credential against the plane it belongs to.
+
+## Credits & references
+
+Standing on the shoulders of:
+
+- [zai-org/zai-coding-plugins](https://github.com/zai-org/zai-coding-plugins) — official GLM usage endpoints
+- [steipete/CodexBar](https://github.com/steipete/CodexBar) — Codex field mappings, Kimi web fallback APIs
+- [Mai0313/VibeCodingTracker](https://github.com/Mai0313/VibeCodingTracker) — Codex `wham/usage` + refresh flow
+- [MoonshotAI/kimi-code](https://github.com/MoonshotAI/kimi-code) (`packages/oauth`) — device-code flow and refresh semantics
+- [VicBilibily/GCMP](https://github.com/VicBilibily/GCMP) — Kimi usage response parsing
+- [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) — relay usage endpoint
+- [borawong/AiMaMi](https://github.com/borawong/AiMaMi) — multi-account registry format & the desktop-companion idea
 
 ## License
 
-MIT
+[MIT](LICENSE)
