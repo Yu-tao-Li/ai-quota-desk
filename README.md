@@ -52,6 +52,31 @@ These are documented for anyone building something similar:
 - **Codex token refresh writes back safely**: the refresh flow captures the credential file's mtime first and aborts the write-back if it changed, so it never clobbers a token rotated concurrently by the Codex CLI or AiMaMi.
 - **Kimi's two API planes don't mix**: `api.kimi.com/coding/v1` accepts the CLI/OAuth identity, while `www.kimi.com/apiv2` (monthly pool, plan title) only accepts web-session cookies. Query each credential against the plane it belongs to.
 
+## Claude Reset Calendar (zero-access mode)
+
+For Claude accounts the widget intentionally does **not** act as a quota monitor. There is no `claude` invocation, no Anthropic API call, no request to `claude.ai` / `api.anthropic.com`, and no reading of `~/.claude` credentials or usage — enforced by keeping the feature in an isolated module (`src-tauri/src/reset_calendar.rs`) whose only inputs are:
+
+```
+reset_schedule.json  →  local clock  →  next reset = anchor + N × 7 days  →  card
+```
+
+Each account stores one **confirmed weekly-reset anchor** (a full ISO-8601 timestamp, e.g. `2026-10-09T19:59:00+08:00`). The card then shows, per account: weekday + time, a live countdown, and the next concrete date. No percentages, no usage numbers — by design, so the feature can never drift into quietly querying Claude.
+
+To bind the calendar to your launcher aliases, have each function also write the active account to a local file the widget reads:
+
+```powershell
+function claude1 {
+    "claude1" | Out-File "$env:APPDATA\ai-quota-desk\active-claude.txt" -Encoding utf8
+    claude
+}
+function claude2 {
+    "claude2" | Out-File "$env:APPDATA\ai-quota-desk\active-claude.txt" -Encoding utf8
+    claude
+}
+```
+
+Anchors and the active account are managed in the in-app settings (add / edit / delete), or edit `reset_schedule.json` in `%APPDATA%/ai-quota-desk/` directly. A ready-made launcher snippet is in [`docs/claude-launchers.ps1`](docs/claude-launchers.ps1).
+
 ## Credits & references
 
 Standing on the shoulders of:

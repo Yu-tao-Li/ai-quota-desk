@@ -3,6 +3,7 @@
 mod config;
 mod kimi_oauth;
 mod providers;
+mod reset_calendar;
 mod zcode_creds;
 
 use config::{Config, ConfigView};
@@ -139,7 +140,8 @@ pub fn run() {
             config: RwLock::new(config::load()),
         })
         .invoke_handler(tauri::generate_handler![
-            query_all, get_config, set_config, kimi_login_start, kimi_login_poll, kimi_login_status, kimi_logout, hide_main, minimize_main
+            query_all, get_config, set_config, kimi_login_start, kimi_login_poll, kimi_login_status, kimi_logout, hide_main, minimize_main,
+            reset_calendar_get, reset_calendar_set, reset_calendar_active_set
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "显示 / 隐藏", true, None::<&str>)?;
@@ -176,4 +178,21 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// ── Claude Reset Calendar 薄壳（宏作用域限制，命令定义在 lib.rs）──
+
+#[tauri::command]
+fn reset_calendar_get() -> Result<Vec<reset_calendar::CalendarItem>, String> {
+    reset_calendar::calendar_get()
+}
+
+#[tauri::command]
+fn reset_calendar_set(entries: Vec<reset_calendar::Entry>) -> Result<(), String> {
+    reset_calendar::calendar_set(&entries)
+}
+
+#[tauri::command]
+fn reset_calendar_active_set(name: String) -> Result<(), String> {
+    reset_calendar::active_set(&name)
 }

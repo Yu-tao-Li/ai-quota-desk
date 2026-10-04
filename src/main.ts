@@ -45,6 +45,18 @@ interface ConfigView {
   codex_auth_found: boolean;
 }
 
+interface CalendarItem {
+  name: string;
+  anchor: string;
+  next_reset_ms: number;
+  active: boolean;
+}
+
+interface CalEntry {
+  name: string;
+  anchor: string;
+}
+
 interface DeviceAuthStart {
   user_code: string;
   verification_url: string;
@@ -89,6 +101,7 @@ const PLAN_LABELS: Record<string, string> = {
 let quotas: ProviderQuota[] = [];
 let cfgView: ConfigView | null = null;
 let kimiLogin: KimiLoginStatus | null = null;
+let claudeCal: CalendarItem[] = [];
 let view: "main" | "settings" = "main";
 let refreshing = false;
 let refreshTimer: number | undefined;
@@ -213,6 +226,31 @@ function renderMain(): string {
   const timeText = latest
     ? new Date(latest).toLocaleTimeString("zh-CN", { hour12: false })
     : "--:--:--";
+  const claudeCard = claudeCal.length
+    ? `<div class="card claude-card" data-card="claude" style="border-left-color:#d97757">
+        <div class="card-head" data-tauri-drag-region>
+          <span class="logo" style="color:#d97757">✦</span>
+          <span class="pname">Claude Reset Calendar</span>
+        </div>
+        <div class="card-body">
+          ${claudeCal
+            .map(
+              (c) => `
+          <div class="window claude-line ${c.active ? "claude-active" : ""}">
+            <div class="window-top">
+              <span class="wlabel">${esc(c.name)}${c.active ? ' <span class="active-tag">当前</span>' : ""}</span>
+              <span class="remain" style="color:#8fb3d9">${fmtReset(c.next_reset_ms - Date.now())}</span>
+            </div>
+            <div class="window-bottom">
+              <span class="used">每周重置</span>
+              <span class="reset">${fmtMinute(c.next_reset_ms)}</span>
+            </div>
+          </div>`
+            )
+            .join("")}
+        </div>
+      </div>`
+    : "";
   return `
     <div class="head" data-tauri-drag-region>
       <span class="title" data-tauri-drag-region>AI Quota</span>
@@ -224,7 +262,67 @@ function renderMain(): string {
     </div>
     <div class="cards" id="cards">
       ${quotas.length ? quotas.map(cardHtml).join('<div class="divider"></div>') : `<div class="loading">正在查询…</div>`}
+      ${claudeCard}
     </div>`;
+}
+
+/** RFC3339（含偏移）→ datetime-local 输入值（本地时区） */
+function anchorToLocalInput(anchor: string): string {
+  const d = new Date(anchor);
+  if (isNaN(d.getTime())) return "";
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** datetime-local 值 → 本地时区 RFC3339 */
+function localInputToAnchor(v: string): string {
+  if (!v) return "";
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return "";
+  return d.toISOString();
+}
+
+function wireCalendarEditor(): void {
+  const rows = document.getElementById("cal-rows");
+  if (!rows) return;
+  rows.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.classList.contains("cal-del")) {
+      (t.closest(".cal-row") as HTMLElement)?.remove();
+    }
+  });
+  document.getElementById("btn-cal-add")?.addEventListener("click", () => {
+    const row = document.createElement("div");
+    row.className = "cal-row";
+    row.innerHTML = `
+      <input class="cal-name" type="text" placeholder="claude3" spellcheck="false"/>
+      <input class="cal-anchor" type="datetime-local"/>
+      <button class="mini-btn subtle cal-del" title="删除">✕</button>`;
+    rows.appendChild(row);
+  });
+  document.querySelectorAll<HTMLButtonElement>(".cal-act").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const name = b.dataset.name ?? "";
+      try {
+        await invoke("reset_calendar_active_set", { name });
+        claudeCal = await invoke<CalendarItem[]>("reset_calendar_get");
+        render();
+      } catch (e) {
+        b.textContent = String(e);
+      }
+    })
+  );
+}
+
+function collectCalendarEntries(): CalEntry[] {
+  const out: CalEntry[] = [];
+  document.querySelectorAll<HTMLElement>("#cal-rows .cal-row").forEach((row) => {
+    const name = (row.querySelector(".cal-name") as HTMLInputElement)?.value.trim() ?? "";
+    const local = (row.querySelector(".cal-anchor") as HTMLInputElement)?.value ?? "";
+    const anchor = localInputToAnchor(local);
+    if (name && anchor) out.push({ name, anchor });
+  });
+  return out;
 }
 
 function kimiStateText(): string {
@@ -311,6 +409,30 @@ function renderSettings(): string {
       <label>Kimi 网页 Token（可选，手动覆盖登录态）</label>
       <input id="in-kimi-web" type="password" placeholder="留空 = 使用上方登录的账号" value="${esc(c.kimi_web_token)}" spellcheck="false"/>
       <div class="hint">月度总量池只能用网页登录态查询：登录 kimi.com 后，F12 → 应用 → Cookie → 复制 kimi-auth 的完整值粘贴到这里</div>
+      <label>Claude Reset Calendar（纯本地推算，不访问 Claude）</label>
+      <div id="cal-rows">
+        ${claudeCal
+          .map(
+            (c) => `
+        <div class="cal-row" data-name="${esc(c.name)}">
+          <input class="cal-name" type="text" value="${esc(c.name)}" spellcheck="false"/>
+          <input class="cal-anchor" type="datetime-local" value="${anchorToLocalInput(c.anchor)}"/>
+          <button class="mini-btn subtle cal-del" title="删除">✕</button>
+        </div>`
+          )
+          .join("")}
+      </div>
+      <div class="login-row">
+        <button id="btn-cal-add" class="mini-btn subtle">＋ 添加账号</button>
+        <span class="hint">锚点 = 某次确认的重置时间点，之后每 7 天自动推算</span>
+      </div>
+      <div class="login-row">
+        <span class="hint">当前激活账号：${claudeCal.find((x) => x.active)?.name ?? "未设置"}</span>
+        ${claudeCal
+          .filter((x) => !x.active)
+          .map((x) => `<button class="mini-btn subtle cal-act" data-name="${esc(x.name)}">设 ${esc(x.name)} 为当前</button>`)
+          .join("")}
+      </div>
       <label>DeepSeek API Key（余额）</label>
       <input id="in-deepseek" type="password" placeholder="sk-…" value="${esc(c.deepseek_key)}" spellcheck="false"/>
       <label>ChatGPT 显示名</label>
@@ -356,6 +478,7 @@ function render() {
       kimiLogin = await invoke<KimiLoginStatus>("kimi_login_status");
       render();
     });
+    wireCalendarEditor();
     app.querySelector("#btn-save")?.addEventListener("click", () => void saveSettings());
   }
 }
@@ -408,6 +531,10 @@ async function saveSettings() {
   };
   try {
     await invoke("set_config", { newCfg: cfg });
+    // Claude 重置日历：保存锚点后刷新本地推算
+    const calEntries = collectCalendarEntries();
+    await invoke("reset_calendar_set", { entries: calEntries });
+    claudeCal = await invoke<CalendarItem[]>("reset_calendar_get");
     cfgView = await invoke<ConfigView>("get_config");
     scheduleAutoRefresh();
     view = "main";
@@ -435,6 +562,11 @@ async function init() {
     kimiLogin = await invoke<KimiLoginStatus>("kimi_login_status");
   } catch {
     kimiLogin = null;
+  }
+  try {
+    claudeCal = await invoke<CalendarItem[]>("reset_calendar_get");
+  } catch {
+    claudeCal = [];
   }
   render();
   scheduleAutoRefresh();

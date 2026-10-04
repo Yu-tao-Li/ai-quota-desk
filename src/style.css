@@ -75,6 +75,7 @@ body {
 .cards {
   flex: 1 1 auto;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 0 12px 12px;
   column-count: 2;
   column-gap: 10px;
@@ -202,7 +203,8 @@ body {
 }
 
 .credit-line {
-  font-size: 13.5px;
+  font-size: 12px;
+  word-break: break-all;
   color: #a8b0c0;
   line-height: 1.7;
 }
@@ -377,4 +379,44 @@ body {
 
 .login-wait {
   color: #c9a86a;
+}
+
+.claude-card {
+  grid-column: auto;
+}
+
+.claude-line {
+  border-left: 2px solid rgba(217, 119, 87, 0.4);
+  padding-left: 8px;
+}
+
+.claude-line.claude-active {
+  background: rgba(217, 119, 87, 0.06);
+  border-radius: 6px;
+  padding: 4px 4px 4px 8px;
+}
+
+.active-tag {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(217, 119, 87, 0.25);
+  color: #e8b8a5;
+  margin-left: 4px;
+}
+
+.cal-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.cal-row .cal-name {
+  flex: 0 0 32%;
+}
+
+.cal-row .cal-anchor {
+  flex: 1;
 }
