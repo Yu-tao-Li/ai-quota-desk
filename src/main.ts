@@ -232,22 +232,8 @@ function renderMain(): string {
           <span class="logo" style="color:#d97757">✦</span>
           <span class="pname">Claude Reset Calendar</span>
         </div>
-        <div class="card-body">
-          ${claudeCal
-            .map(
-              (c) => `
-          <div class="window claude-line ${c.active ? "claude-active" : ""}">
-            <div class="window-top">
-              <span class="wlabel">${esc(c.name)}${c.active ? ' <span class="active-tag">当前</span>' : ""}</span>
-              <span class="remain" style="color:#8fb3d9">${fmtReset(c.next_reset_ms - Date.now())}</span>
-            </div>
-            <div class="window-bottom">
-              <span class="used">每周重置</span>
-              <span class="reset">${fmtMinute(c.next_reset_ms)}</span>
-            </div>
-          </div>`
-            )
-            .join("")}
+        <div class="card-body" id="claude-cal-body">
+          ${claudeCalBodyHtml()}
         </div>
       </div>`
     : "";
@@ -323,6 +309,35 @@ function collectCalendarEntries(): CalEntry[] {
     if (name && anchor) out.push({ name, anchor });
   });
   return out;
+}
+
+/** 纯本地推算：anchor + N×7d，第一个晚于当前时刻的时间点（与后端算法一致） */
+function nextResetFromAnchor(anchor: string, now = Date.now()): number {
+  let t = new Date(anchor).getTime();
+  if (isNaN(t)) return 0;
+  const week = 7 * 24 * 3600 * 1000;
+  for (let i = 0; i < 520 && t <= now; i++) t += week;
+  return t > now ? t : 0;
+}
+
+/** Claude 日历卡片内容（每次调用都用当前时钟重算，重置过点自动滚动到下一周期） */
+function claudeCalBodyHtml(): string {
+  return claudeCal
+    .map((c) => {
+      const next = nextResetFromAnchor(c.anchor);
+      return `
+          <div class="window claude-line ${c.active ? "claude-active" : ""}">
+            <div class="window-top">
+              <span class="wlabel">${esc(c.name)}${c.active ? ' <span class="active-tag">当前</span>' : ""}</span>
+              <span class="remain" style="color:#8fb3d9">${next ? fmtReset(next - Date.now()) : "锚点无效"}</span>
+            </div>
+            <div class="window-bottom">
+              <span class="used">每周重置</span>
+              <span class="reset">${next ? fmtMinute(next) : "—"}</span>
+            </div>
+          </div>`;
+    })
+    .join("");
 }
 
 function kimiStateText(): string {
@@ -488,6 +503,11 @@ function updateTimes() {
     const t = Number(el.dataset.reset);
     if (t) el.textContent = fmtReset(t - Date.now());
   });
+  // Claude 日历：每 30 秒用本机时钟重算（重置过点自动滚动到下一周期）
+  const body = document.getElementById("claude-cal-body");
+  if (body && claudeCal.length && view === "main") {
+    body.innerHTML = claudeCalBodyHtml();
+  }
 }
 
 async function refresh() {
@@ -497,6 +517,8 @@ async function refresh() {
   if (btn) btn.classList.add("spin");
   try {
     quotas = await invoke<ProviderQuota[]>("query_all");
+    // 顺带同步日历（拿最新激活账号/锚点编辑结果；纯本地文件读取，零网络）
+    claudeCal = await invoke<CalendarItem[]>("reset_calendar_get");
   } catch (e) {
     quotas = [
       { id: "err", name: "查询失败", ok: false, error: String(e), plan: null, extra: null, windows: [], credits: [], fetched_at_ms: Date.now() },

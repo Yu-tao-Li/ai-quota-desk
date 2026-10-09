@@ -215,7 +215,12 @@ fn parse_wham(body: &Value, now: i64, out: &mut ProviderQuota) {
         });
         if credits.get("has_credits").and_then(|h| h.as_bool()).unwrap_or(false) {
             if let Some(b) = balance {
-                extras.push(format!("Credits {b}"));
+                // 上游可能返回浮点字符串（如 "62500.0000000000"），规整为整数显示
+                let shown = b
+                    .parse::<f64>()
+                    .map(|n| format!("{}", n as i64))
+                    .unwrap_or_else(|_| b.clone());
+                extras.push(format!("Credits {shown}"));
             }
         }
     }
