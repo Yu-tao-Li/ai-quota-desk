@@ -77,6 +77,10 @@ function claude2 {
 
 Anchors and the active account are managed in the in-app settings (add / edit / delete), or edit `reset_schedule.json` in `%APPDATA%/ai-quota-desk/` directly. A ready-made launcher snippet is in [`docs/claude-launchers.ps1`](docs/claude-launchers.ps1).
 
+### Optional: offline usage from local statusline cache
+
+If your statusline tool writes per-account usage caches (e.g. `E:\ClaudeProfiles\<account>\statusline-usage.json` with `five_hour` / `seven_day` → `used_percentage` + `resets_at`), the Claude card also shows **5-hour / 7-day used percentages** per account — read purely from those local files, still zero network. Colors: green < 80%, amber < 100%, red ⚠ at 100%+. A "本地缓存 hh:mm · 可能滞后" hint reminds you the numbers come from the cache and may lag; the server's numbers always win.
+
 ## Credits & references
 
 Standing on the shoulders of:

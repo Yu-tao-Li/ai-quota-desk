@@ -57,6 +57,16 @@ interface CalEntry {
   anchor: string;
 }
 
+interface ClaudeUsage {
+  account: string;
+  match_name: string;
+  five_hour_used: number | null;
+  five_hour_reset_s: number | null;
+  seven_day_used: number | null;
+  seven_day_reset_s: number | null;
+  cache_mtime_ms: number | null;
+}
+
 interface DeviceAuthStart {
   user_code: string;
   verification_url: string;
@@ -102,6 +112,7 @@ let quotas: ProviderQuota[] = [];
 let cfgView: ConfigView | null = null;
 let kimiLogin: KimiLoginStatus | null = null;
 let claudeCal: CalendarItem[] = [];
+let claudeUsage: ClaudeUsage[] = [];
 let view: "main" | "settings" = "main";
 let refreshing = false;
 let refreshTimer: number | undefined;
@@ -292,6 +303,7 @@ function wireCalendarEditor(): void {
       try {
         await invoke("reset_calendar_active_set", { name });
         claudeCal = await invoke<CalendarItem[]>("reset_calendar_get");
+    claudeUsage = await invoke<ClaudeUsage[]>("claude_usage_get").catch(() => []);
         render();
       } catch (e) {
         b.textContent = String(e);
@@ -322,22 +334,53 @@ function nextResetFromAnchor(anchor: string, now = Date.now()): number {
 
 /** Claude 日历卡片内容（每次调用都用当前时钟重算，重置过点自动滚动到下一周期） */
 function claudeCalBodyHtml(): string {
-  return claudeCal
+  const usageFor = (name: string): ClaudeUsage | undefined =>
+    claudeUsage.find((u) => u.match_name === name);
+  const usedColor = (used: number): string => (used >= 100 ? "#c97a7a" : used >= 80 ? "#c9a86a" : "#5fb877");
+  const usageLine = (u: ClaudeUsage | undefined): string => {
+    if (!u || (u.five_hour_used === null && u.seven_day_used === null)) return "";
+    const part = (label: string, used: number | null): string => {
+      if (used === null) return "";
+      const color = usedColor(used);
+      const over = used >= 100 ? " ⚠" : "";
+      return `<span style="color:${color}">${label} ${Math.round(used)}%${over}</span>`;
+    };
+    const five = part("5小时", u.five_hour_used);
+    const seven = part("7天", u.seven_day_used);
+    const sep = five && seven ? ` <span class="muted">·</span> ` : "";
+    return `<div class="window-bottom claude-usage">${five}${sep}${seven}</div>`;
+  };
+  const cacheHint = (): string => {
+    const times = claudeUsage.map((u) => u.cache_mtime_ms).filter((t): t is number => !!t);
+    if (!times.length) return "";
+    const latest = new Date(Math.max(...times));
+    return `<div class="extra">本地缓存 ${latest.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })} · 可能滞后</div>`;
+  };
+  const all = [
+    ...claudeCal.map((c) => ({ name: c.name, anchor: c.anchor, active: c.active })),
+    // 有缓存但没有日历条目的账号也显示
+    ...claudeUsage
+      .filter((u) => !claudeCal.some((c) => c.name === u.match_name))
+      .map((u) => ({ name: u.match_name || u.account, anchor: "", active: false })),
+  ];
+  return all
     .map((c) => {
-      const next = nextResetFromAnchor(c.anchor);
+      const u = claudeUsage.find((x) => x.match_name === c.name);
+      const next = c.anchor ? nextResetFromAnchor(c.anchor) : 0;
       return `
           <div class="window claude-line ${c.active ? "claude-active" : ""}">
             <div class="window-top">
               <span class="wlabel">${esc(c.name)}${c.active ? ' <span class="active-tag">当前</span>' : ""}</span>
-              <span class="remain" style="color:#8fb3d9">${next ? fmtReset(next - Date.now()) : "锚点无效"}</span>
+              <span class="remain" style="color:#8fb3d9">${next ? fmtReset(next - Date.now()) : u ? "仅缓存用量" : "锚点无效"}</span>
             </div>
+            ${usageLine(u)}
             <div class="window-bottom">
               <span class="used">每周重置</span>
               <span class="reset">${next ? fmtMinute(next) : "—"}</span>
             </div>
           </div>`;
     })
-    .join("");
+    .join("") + cacheHint();
 }
 
 function kimiStateText(): string {
@@ -519,6 +562,7 @@ async function refresh() {
     quotas = await invoke<ProviderQuota[]>("query_all");
     // 顺带同步日历（拿最新激活账号/锚点编辑结果；纯本地文件读取，零网络）
     claudeCal = await invoke<CalendarItem[]>("reset_calendar_get");
+    claudeUsage = await invoke<ClaudeUsage[]>("claude_usage_get").catch(() => []);
   } catch (e) {
     quotas = [
       { id: "err", name: "查询失败", ok: false, error: String(e), plan: null, extra: null, windows: [], credits: [], fetched_at_ms: Date.now() },
@@ -557,6 +601,7 @@ async function saveSettings() {
     const calEntries = collectCalendarEntries();
     await invoke("reset_calendar_set", { entries: calEntries });
     claudeCal = await invoke<CalendarItem[]>("reset_calendar_get");
+    claudeUsage = await invoke<ClaudeUsage[]>("claude_usage_get").catch(() => []);
     cfgView = await invoke<ConfigView>("get_config");
     scheduleAutoRefresh();
     view = "main";
@@ -587,6 +632,7 @@ async function init() {
   }
   try {
     claudeCal = await invoke<CalendarItem[]>("reset_calendar_get");
+    claudeUsage = await invoke<ClaudeUsage[]>("claude_usage_get").catch(() => []);
   } catch {
     claudeCal = [];
   }

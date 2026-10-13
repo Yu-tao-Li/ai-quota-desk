@@ -4,6 +4,7 @@ mod config;
 mod kimi_oauth;
 mod providers;
 mod reset_calendar;
+mod claude_usage;
 mod zcode_creds;
 
 use config::{Config, ConfigView};
@@ -141,7 +142,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             query_all, get_config, set_config, kimi_login_start, kimi_login_poll, kimi_login_status, kimi_logout, hide_main, minimize_main,
-            reset_calendar_get, reset_calendar_set, reset_calendar_active_set
+            reset_calendar_get, reset_calendar_set, reset_calendar_active_set, claude_usage_get
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "显示 / 隐藏", true, None::<&str>)?;
@@ -195,4 +196,9 @@ fn reset_calendar_set(entries: Vec<reset_calendar::Entry>) -> Result<(), String>
 #[tauri::command]
 fn reset_calendar_active_set(name: String) -> Result<(), String> {
     reset_calendar::active_set(&name)
+}
+
+#[tauri::command]
+fn claude_usage_get() -> Vec<claude_usage::ClaudeUsage> {
+    claude_usage::load_all()
 }
