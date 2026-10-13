@@ -339,14 +339,22 @@ function claudeCalBodyHtml(): string {
   const usedColor = (used: number): string => (used >= 100 ? "#c97a7a" : used >= 80 ? "#c9a86a" : "#5fb877");
   const usageLine = (u: ClaudeUsage | undefined): string => {
     if (!u || (u.five_hour_used === null && u.seven_day_used === null)) return "";
-    const part = (label: string, used: number | null): string => {
+    const hm = (resetS: number | null): string => {
+      if (!resetS) return "";
+      const d = new Date(resetS * 1000);
+      const p = (n: number) => String(n).padStart(2, "0");
+      return `${p(d.getHours())}:${p(d.getMinutes())}`;
+    };
+    const part = (label: string, used: number | null, resetS: number | null): string => {
       if (used === null) return "";
       const color = usedColor(used);
       const over = used >= 100 ? " ⚠" : "";
-      return `<span style="color:${color}">${label} ${Math.round(used)}%${over}</span>`;
+      const rt = hm(resetS);
+      const resetTxt = rt ? ` <span class="muted">${rt}重置</span>` : "";
+      return `<span style="color:${color}">${label} ${Math.round(used)}%${over}${resetTxt}</span>`;
     };
-    const five = part("5小时", u.five_hour_used);
-    const seven = part("7天", u.seven_day_used);
+    const five = part("5小时", u.five_hour_used, u.five_hour_reset_s);
+    const seven = part("7天", u.seven_day_used, u.seven_day_reset_s);
     const sep = five && seven ? ` <span class="muted">·</span> ` : "";
     return `<div class="window-bottom claude-usage">${five}${sep}${seven}</div>`;
   };

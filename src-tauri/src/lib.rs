@@ -145,6 +145,28 @@ pub fn run() {
             reset_calendar_get, reset_calendar_set, reset_calendar_active_set, claude_usage_get
         ])
         .setup(|app| {
+            // 宽高比锁：保持 588:736（用户指定），拖拽缩放时自动纠正高度
+            if let Some(main) = app.get_webview_window("main") {
+                const RATIO: f64 = 736.0 / 588.0;
+                let win = main.clone();
+                main.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Resized(size) = event {
+                        if win.is_maximized().unwrap_or(false) || win.is_fullscreen().unwrap_or(false) {
+                            return;
+                        }
+                        let scale = win.scale_factor().unwrap_or(1.0);
+                        let logical_w = size.width as f64 / scale;
+                        let logical_h = size.height as f64 / scale;
+                        if logical_w < 50.0 {
+                            return;
+                        }
+                        let want_h = logical_w * RATIO;
+                        if (logical_h - want_h).abs() > 2.0 {
+                            let _ = win.set_size(tauri::LogicalSize::new(logical_w, want_h));
+                        }
+                    }
+                });
+            }
             let show = MenuItem::with_id(app, "show", "显示 / 隐藏", true, None::<&str>)?;
             let refresh = MenuItem::with_id(app, "refresh", "立即刷新", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
