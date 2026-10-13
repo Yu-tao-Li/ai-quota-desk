@@ -420,3 +420,110 @@ body {
 .cal-row .cal-anchor {
   flex: 1;
 }
+
+/* ===== 分区布局（v2 排版） ===== */
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  column-count: unset;
+}
+
+.duo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.duo .card {
+  margin-bottom: 0;
+}
+
+.gpt-row {
+  padding: 6px 0;
+}
+
+.gpt-row + .gpt-row,
+.gpt-sep {
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+
+.gpt-name {
+  font-weight: 700;
+  color: #e6e9f0;
+}
+
+.bar.mini {
+  height: 4px;
+  margin: 4px 0;
+}
+
+.gpt-extra {
+  font-size: 11px;
+  color: #9aa1b2;
+}
+
+.bal-tile {
+  margin-bottom: 0;
+}
+
+.bal-tile .balance {
+  font-size: 21px;
+  padding: 2px 0;
+}
+
+/* Claude 重置日历：表格 */
+.claude-card .card-body {
+  display: block;
+}
+
+.cal-hrow,
+.cal-trow {
+  display: grid;
+  grid-template-columns: 82px 1fr 122px;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 2px;
+}
+
+.cal-hrow {
+  font-size: 10.5px;
+  color: #8a93a6;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  padding-bottom: 5px;
+  margin-bottom: 3px;
+}
+
+.cal-trow {
+  border-radius: 7px;
+}
+
+.cal-trow.active {
+  background: rgba(217, 119, 87, 0.08);
+}
+
+.cal-trow + .cal-trow {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.cal-account {
+  font-weight: 700;
+  color: #e6e9f0;
+  white-space: nowrap;
+}
+
+.cal-cell {
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.cal-hint {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: #6b7385;
+  text-align: right;
+}

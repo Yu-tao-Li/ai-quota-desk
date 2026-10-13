@@ -232,22 +232,84 @@ function cardHtml(p: ProviderQuota): string {
     </div>`;
 }
 
+/** ChatGPT 多账号：合并为一张卡，每账号一行紧凑布局 */
+function gptCardHtml(gpts: ProviderQuota[]): string {
+  const rows = gpts
+    .map((g) => {
+      const name = g.name.replace(/^ChatGPT\s*/i, "") || g.name;
+      const w = g.windows[0];
+      const head = `
+        <div class="window-top">
+          <span class="wlabel gpt-name">${esc(name)}</span>
+          ${
+            w
+              ? `<span class="remain" style="color:${barColor(Math.round(w.remaining_percent))}">剩${Math.round(w.remaining_percent)}%</span>`
+              : '<span class="muted">—</span>'
+          }
+        </div>`;
+      let mid = "";
+      if (w) {
+        const pct = Math.round(w.remaining_percent);
+        const reset = w.resets_at_ms
+          ? `<span class="reset" data-reset="${w.resets_at_ms}">${fmtReset(w.resets_at_ms - Date.now())}</span>`
+          : "";
+        mid = `
+        <div class="bar mini"><div class="fill" style="width:${pct}%;background:${barColor(pct)}"></div></div>
+        <div class="window-bottom">
+          <span class="used">${w.used_text ? esc(w.used_text) : `已用 ${Math.round(w.used_percent)}%`}</span>
+          ${reset}
+        </div>`;
+      } else if (g.error) {
+        mid = `<div class="error">${esc(g.error)}</div>`;
+      }
+      const credits = g.extra ? `<div class="window-bottom gpt-extra">${esc(g.extra)}</div>` : "";
+      return `<div class="gpt-row">${head}${mid}${credits}</div>`;
+    })
+    .join('<div class="gpt-sep"></div>');
+  return `
+    <div class="card" data-card="codex" style="border-left-color:${PROVIDER_COLORS.codex}">
+      <div class="card-head" data-tauri-drag-region>
+        ${logoSvg("codex", PROVIDER_COLORS.codex)}
+        <span class="pname">ChatGPT</span>
+        <span class="plan">${gpts.length} 账号</span>
+      </div>
+      <div class="card-body">${rows}</div>
+    </div>`;
+}
+
+/** 余额小卡（DeepSeek / Luchikey） */
+function balanceTile(p: ProviderQuota): string {
+  const color = PROVIDER_COLORS[p.id] ?? "#888";
+  const amount = p.extra ? p.extra.split("\n")[0] : "";
+  const body = p.ok
+    ? `<div class="balance">${esc(amount)}</div>`
+    : `<div class="error">${esc(p.error ?? "查询失败")}</div>`;
+  return `
+    <div class="card bal-tile" style="border-left-color:${color}">
+      <div class="card-head">
+        ${logoSvg(p.id, color)}
+        <span class="pname">${esc(p.name)}</span>
+      </div>
+      ${body}
+    </div>`;
+}
+
 function renderMain(): string {
   const latest = quotas.length ? Math.max(...quotas.map((q) => q.fetched_at_ms || 0)) : 0;
   const timeText = latest
     ? new Date(latest).toLocaleTimeString("zh-CN", { hour12: false })
     : "--:--:--";
-  const claudeCard = claudeCal.length
-    ? `<div class="card claude-card" data-card="claude" style="border-left-color:#d97757">
-        <div class="card-head" data-tauri-drag-region>
-          <span class="logo" style="color:#d97757">✦</span>
-          <span class="pname">Claude Reset Calendar</span>
-        </div>
-        <div class="card-body" id="claude-cal-body">
-          ${claudeCalBodyHtml()}
-        </div>
-      </div>`
-    : "";
+  // 分组排版：GLM+Kimi 双列主卡 / ChatGPT 多账号合并卡 / 余额双联 / Claude 日历表
+  const glm = quotas.find((q) => q.id === "glm");
+  const kimi = quotas.find((q) => q.id === "kimi");
+  const gpts = quotas.filter((q) => q.id === "codex");
+  const balances = quotas.filter((q) => q.id === "deepseek" || q.id === "luchikey");
+  const loading = !quotas.length;
+  const glmKimi = [glm, kimi]
+    .filter((q): q is ProviderQuota => Boolean(q))
+    .map(cardHtml)
+    .join("");
+  const glmKimiBlock = glmKimi ? `<div class="duo">${glmKimi}</div>` : "";
   return `
     <div class="head" data-tauri-drag-region>
       <span class="title" data-tauri-drag-region>AI Quota</span>
@@ -258,8 +320,11 @@ function renderMain(): string {
       <button id="btn-hide" class="icon-btn" title="隐藏到托盘">—</button>
     </div>
     <div class="cards" id="cards">
-      ${quotas.length ? quotas.map(cardHtml).join('<div class="divider"></div>') : `<div class="loading">正在查询…</div>`}
-      ${claudeCard}
+      ${loading ? '<div class="loading">正在查询…</div>' : ""}
+      ${glmKimiBlock}
+      ${gpts.length ? gptCardHtml(gpts) : ""}
+      ${balances.length ? `<div class="duo">${balances.map(balanceTile).join("")}</div>` : ""}
+      ${claudeTableHtml()}
     </div>`;
 }
 
@@ -332,37 +397,29 @@ function nextResetFromAnchor(anchor: string, now = Date.now()): number {
   return t > now ? t : 0;
 }
 
-/** Claude 日历卡片内容（每次调用都用当前时钟重算，重置过点自动滚动到下一周期） */
-function claudeCalBodyHtml(): string {
+/** Claude 日历表格行（不含卡片外壳；updateTimes 用它整段刷新） */
+function claudeTableRowsHtml(): string {
+  if (!claudeCal.length && !claudeUsage.length) return "";
   const usageFor = (name: string): ClaudeUsage | undefined =>
     claudeUsage.find((u) => u.match_name === name);
-  const usedColor = (used: number): string => (used >= 100 ? "#c97a7a" : used >= 80 ? "#c9a86a" : "#5fb877");
-  const usageLine = (u: ClaudeUsage | undefined): string => {
-    if (!u || (u.five_hour_used === null && u.seven_day_used === null)) return "";
-    const hm = (resetS: number | null): string => {
-      if (!resetS) return "";
-      const d = new Date(resetS * 1000);
-      const p = (n: number) => String(n).padStart(2, "0");
-      return `${p(d.getHours())}:${p(d.getMinutes())}`;
-    };
-    const part = (label: string, used: number | null, resetS: number | null): string => {
-      if (used === null) return "";
-      const color = usedColor(used);
-      const over = used >= 100 ? " ⚠" : "";
-      const rt = hm(resetS);
-      const resetTxt = rt ? ` <span class="muted">${rt}重置</span>` : "";
-      return `<span style="color:${color}">${label} ${Math.round(used)}%${over}${resetTxt}</span>`;
-    };
-    const five = part("5小时", u.five_hour_used, u.five_hour_reset_s);
-    const seven = part("7天", u.seven_day_used, u.seven_day_reset_s);
-    const sep = five && seven ? ` <span class="muted">·</span> ` : "";
-    return `<div class="window-bottom claude-usage">${five}${sep}${seven}</div>`;
+  const usedColor = (used: number): string =>
+    used >= 100 ? "#c97a7a" : used >= 80 ? "#c9a86a" : "#5fb877";
+  const wd = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  const hm = (resetS: number | null): string => {
+    if (!resetS) return "";
+    const d = new Date(resetS * 1000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${p(d.getHours())}:${p(d.getMinutes())}`;
   };
-  const cacheHint = (): string => {
-    const times = claudeUsage.map((u) => u.cache_mtime_ms).filter((t): t is number => !!t);
-    if (!times.length) return "";
-    const latest = new Date(Math.max(...times));
-    return `<div class="extra">本地缓存 ${latest.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })} · 可能滞后</div>`;
+  const usageCell = (u: ClaudeUsage | undefined): string => {
+    if (!u) return '<span class="muted">—</span>';
+    const cell = (used: number | null, resetS: number | null): string => {
+      if (used === null) return '<span class="muted">—</span>';
+      const color = usedColor(used);
+      const over = used >= 100 ? "⚠" : "";
+      return `<span style="color:${color}">${Math.round(used)}%${over}</span> <span class="muted">${hm(resetS)}</span>`;
+    };
+    return cell(u.five_hour_used, u.five_hour_reset_s) + "<br/>" + cell(u.seven_day_used, u.seven_day_reset_s);
   };
   const all = [
     ...claudeCal.map((c) => ({ name: c.name, anchor: c.anchor, active: c.active })),
@@ -371,24 +428,41 @@ function claudeCalBodyHtml(): string {
       .filter((u) => !claudeCal.some((c) => c.name === u.match_name))
       .map((u) => ({ name: u.match_name || u.account, anchor: "", active: false })),
   ];
-  return all
+  const rows = all
     .map((c) => {
-      const u = claudeUsage.find((x) => x.match_name === c.name);
+      const u = usageFor(c.name);
       const next = c.anchor ? nextResetFromAnchor(c.anchor) : 0;
+      const nextCell = next
+        ? `${fmtReset(next - Date.now())}<br/><span class="muted">${fmtMinute(next)}</span>`
+        : '<span class="muted">—</span>';
       return `
-          <div class="window claude-line ${c.active ? "claude-active" : ""}">
-            <div class="window-top">
-              <span class="wlabel">${esc(c.name)}${c.active ? ' <span class="active-tag">当前</span>' : ""}</span>
-              <span class="remain" style="color:#8fb3d9">${next ? fmtReset(next - Date.now()) : u ? "仅缓存用量" : "锚点无效"}</span>
-            </div>
-            ${usageLine(u)}
-            <div class="window-bottom">
-              <span class="used">每周重置</span>
-              <span class="reset">${next ? fmtMinute(next) : "—"}</span>
-            </div>
-          </div>`;
+      <div class="cal-trow${c.active ? " active" : ""}">
+        <span class="cal-account">${esc(c.name)}${c.active ? '<span class="active-tag">当前</span>' : ""}</span>
+        <span class="cal-cell">${usageCell(u)}</span>
+        <span class="cal-cell">${nextCell}</span>
+      </div>`;
     })
-    .join("") + cacheHint();
+    .join("");
+  const times = claudeUsage.map((u) => u.cache_mtime_ms).filter((t): t is number => !!t);
+  const hint = times.length
+    ? `<div class="cal-hint">本地缓存 ${new Date(Math.max(...times)).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })} · 可能滞后</div>`
+    : "";
+  return `<div class="cal-hrow"><span>账号</span><span>用量 5h / 7d</span><span>下次重置</span></div>${rows}${hint}`;
+}
+
+/** 整卡（含外壳） */
+function claudeTableHtml(): string {
+  if (!claudeCal.length && !claudeUsage.length) return "";
+  return `
+      <div class="card claude-card" data-card="claude" style="border-left-color:#d97757">
+        <div class="card-head" data-tauri-drag-region>
+          <span class="logo" style="color:#d97757">✦</span>
+          <span class="pname">Claude Reset Calendar</span>
+        </div>
+        <div class="card-body" id="claude-cal-body">
+          ${claudeTableRowsHtml()}
+        </div>
+      </div>`;
 }
 
 function kimiStateText(): string {
@@ -554,10 +628,10 @@ function updateTimes() {
     const t = Number(el.dataset.reset);
     if (t) el.textContent = fmtReset(t - Date.now());
   });
-  // Claude 日历：每 30 秒用本机时钟重算（重置过点自动滚动到下一周期）
+  // Claude 日历表格：每 30 秒用本机时钟重算（重置过点自动滚动到下一周期）
   const body = document.getElementById("claude-cal-body");
-  if (body && claudeCal.length && view === "main") {
-    body.innerHTML = claudeCalBodyHtml();
+  if (body && (claudeCal.length || claudeUsage.length) && view === "main") {
+    body.innerHTML = claudeTableRowsHtml();
   }
 }
 
