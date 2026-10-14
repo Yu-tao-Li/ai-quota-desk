@@ -232,84 +232,15 @@ function cardHtml(p: ProviderQuota): string {
     </div>`;
 }
 
-/** ChatGPT 多账号：合并为一张卡，每账号一行紧凑布局 */
-function gptCardHtml(gpts: ProviderQuota[]): string {
-  const rows = gpts
-    .map((g) => {
-      const name = g.name.replace(/^ChatGPT\s*/i, "") || g.name;
-      const w = g.windows[0];
-      const head = `
-        <div class="window-top">
-          <span class="wlabel gpt-name">${esc(name)}</span>
-          ${
-            w
-              ? `<span class="remain" style="color:${barColor(Math.round(w.remaining_percent))}">剩${Math.round(w.remaining_percent)}%</span>`
-              : '<span class="muted">—</span>'
-          }
-        </div>`;
-      let mid = "";
-      if (w) {
-        const pct = Math.round(w.remaining_percent);
-        const reset = w.resets_at_ms
-          ? `<span class="reset" data-reset="${w.resets_at_ms}">${fmtReset(w.resets_at_ms - Date.now())}</span>`
-          : "";
-        mid = `
-        <div class="bar mini"><div class="fill" style="width:${pct}%;background:${barColor(pct)}"></div></div>
-        <div class="window-bottom">
-          <span class="used">${w.used_text ? esc(w.used_text) : `已用 ${Math.round(w.used_percent)}%`}</span>
-          ${reset}
-        </div>`;
-      } else if (g.error) {
-        mid = `<div class="error">${esc(g.error)}</div>`;
-      }
-      const credits = g.extra ? `<div class="window-bottom gpt-extra">${esc(g.extra)}</div>` : "";
-      return `<div class="gpt-row">${head}${mid}${credits}</div>`;
-    })
-    .join('<div class="gpt-sep"></div>');
-  return `
-    <div class="card" data-card="codex" style="border-left-color:${PROVIDER_COLORS.codex}">
-      <div class="card-head" data-tauri-drag-region>
-        ${logoSvg("codex", PROVIDER_COLORS.codex)}
-        <span class="pname">ChatGPT</span>
-        <span class="plan">${gpts.length} 账号</span>
-      </div>
-      <div class="card-body">${rows}</div>
-    </div>`;
-}
 
-/** 余额小卡（DeepSeek / Luchikey） */
-function balanceTile(p: ProviderQuota): string {
-  const color = PROVIDER_COLORS[p.id] ?? "#888";
-  const amount = p.extra ? p.extra.split("\n")[0] : "";
-  const body = p.ok
-    ? `<div class="balance">${esc(amount)}</div>`
-    : `<div class="error">${esc(p.error ?? "查询失败")}</div>`;
-  return `
-    <div class="card bal-tile" style="border-left-color:${color}">
-      <div class="card-head">
-        ${logoSvg(p.id, color)}
-        <span class="pname">${esc(p.name)}</span>
-      </div>
-      ${body}
-    </div>`;
-}
 
 function renderMain(): string {
   const latest = quotas.length ? Math.max(...quotas.map((q) => q.fetched_at_ms || 0)) : 0;
   const timeText = latest
     ? new Date(latest).toLocaleTimeString("zh-CN", { hour12: false })
     : "--:--:--";
-  // 分组排版：GLM+Kimi 双列主卡 / ChatGPT 多账号合并卡 / 余额双联 / Claude 日历表
-  const glm = quotas.find((q) => q.id === "glm");
-  const kimi = quotas.find((q) => q.id === "kimi");
-  const gpts = quotas.filter((q) => q.id === "codex");
-  const balances = quotas.filter((q) => q.id === "deepseek" || q.id === "luchikey");
-  const loading = !quotas.length;
-  const glmKimi = [glm, kimi]
-    .filter((q): q is ProviderQuota => Boolean(q))
-    .map(cardHtml)
-    .join("");
-  const glmKimiBlock = glmKimi ? `<div class="duo">${glmKimi}</div>` : "";
+  // 每家一套完整卡片（所有窗口 + 重置卡明细 + 徽章，信息零删减），两列网格排布
+  const cards = quotas.map(cardHtml);
   return `
     <div class="head" data-tauri-drag-region>
       <span class="title" data-tauri-drag-region>AI Quota</span>
@@ -320,10 +251,7 @@ function renderMain(): string {
       <button id="btn-hide" class="icon-btn" title="隐藏到托盘">—</button>
     </div>
     <div class="cards" id="cards">
-      ${loading ? '<div class="loading">正在查询…</div>' : ""}
-      ${glmKimiBlock}
-      ${gpts.length ? gptCardHtml(gpts) : ""}
-      ${balances.length ? `<div class="duo">${balances.map(balanceTile).join("")}</div>` : ""}
+      ${cards.length ? `<div class="duo">${cards.join("")}</div>` : `<div class="loading">正在查询…</div>`}
       ${claudeTableHtml()}
     </div>`;
 }
