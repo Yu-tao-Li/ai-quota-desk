@@ -685,7 +685,6 @@ async function saveSettings() {
     claudeCal = await invoke<CalendarItem[]>("reset_calendar_get");
     claudeUsage = await invoke<ClaudeUsage[]>("claude_usage_get").catch(() => []);
     cfgView = await invoke<ConfigView>("get_config");
-    scheduleAutoRefresh();
     view = "main";
     render();
     await refresh();
@@ -693,12 +692,6 @@ async function saveSettings() {
     const msg = document.getElementById("save-msg");
     if (msg) msg.textContent = `保存失败：${e}`;
   }
-}
-
-function scheduleAutoRefresh() {
-  if (refreshTimer) window.clearInterval(refreshTimer);
-  const minutes = cfgView?.config.refresh_minutes ?? 10;
-  refreshTimer = window.setInterval(() => void refresh(), Math.max(1, minutes) * 60_000);
 }
 
 async function init() {
@@ -719,11 +712,22 @@ async function init() {
     claudeCal = [];
   }
   render();
-  scheduleAutoRefresh();
   clockTimer = window.setInterval(updateTimes, 30_000);
 
+  // 自动刷新由 Rust 后台线程驱动（推 quotas-updated），前端不再依赖会被节流的 JS 定时器
+  await listen("quotas-updated", (e) => {
+    quotas = e.payload as ProviderQuota[];
+    if (view === "main") render();
+  });
   await listen("refresh-requested", () => {
     void refresh();
+  });
+  // 窗口从托盘/后台恢复可见时：立即重绘并拉一次最新数据
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && view === "main") {
+      updateTimes();
+      void refresh();
+    }
   });
 
   await refresh();
